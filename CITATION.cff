@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite this repository."
+title: "DualCT Image Translation"
+type: software
+authors:
+  - name: "Ichikawa Lab"
+version: 0.1.0
+date-released: 2026-07-12
+repository-code: "https://github.com/ichikawalab/dualct-iodine"
+license: MIT

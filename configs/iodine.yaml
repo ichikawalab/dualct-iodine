@@ -1,0 +1,102 @@
+# Complete, standalone config for the iodine task: 120 kVp CT -> Iodine (Lung PBV) map.
+# This file lists every key explicitly. For the same-domain kVp task (120 -> 80/140 kVp),
+# see configs/kvp.yaml -- a separate, equally complete file, not a diff against this one.
+# Override either file via --config, --set key.path=value, or dedicated CLI flags (see README).
+seed: 42
+
+data:
+  root: "./"                       # parent of 120kV_Iodinemap/ and MASK/
+  input_subdir: "120kV_Iodinemap/120 kVp"
+  target_subdir: "120kV_Iodinemap/iodinemaps"
+  mask_subdir: "MASK"
+  patient_ids: null                # null = auto-discover all patients; or explicit list e.g. ["01","02"]
+  nested_groups: false             # true = <root>/<group>/<subdir>/<patient>/ (kVp DE-group layout)
+  cache_dir: null                  # optional PersistentDataset cache; never commit this directory
+
+task:
+  mask_source: "external"          # {external | body_threshold}; iodine task uses the provided MASK/
+  body_thr_hu: -600                # used only when mask_source == body_threshold
+
+normalize:
+  input_hu_min: -1024              # input CT clip range
+  input_hu_max: 3071
+  target_min: 0                    # iodine: negative values are decomposition noise, clipped to 0
+  target_max: 200                  # vendor display window (center=100/width=200)
+
+model:
+  name: "swinunetr"
+  feature_size: 48
+  use_checkpoint: true
+  spatial_dims: 3
+  in_channels: 1
+  out_channels: 1
+  residual: false                  # off by default for iodine (cross-domain task); set true to reuse for kVp->kVp
+  residual_alpha: 1.0
+  unet_channels: [16, 32, 64, 128, 256]
+  unet_strides: [2, 2, 2, 2]
+  unet_num_res_units: 2
+  unet_norm: "INSTANCE"
+  unet_dropout: 0.0
+
+loss:
+  region: "mask"                   # {mask | full} - toggles the spatial region the loss is computed over
+  main: "l1"                       # main loss is always L1
+  aux: "cdf"                       # {none | cdf} - auxiliary Wasserstein/quantile loss toggle
+  lam_cdf: 0.3                     # weight of the auxiliary CDF/Wasserstein term relative to L1
+  cdf_M: 1024                      # number of quantiles used during training
+  cdf_max_voxels: 65536            # maximum selected voxels sorted per sample
+
+train:
+  roi_size: [64, 128, 128]         # sliding-window crop size used for training patches
+  batch_size: 4
+  num_epochs: 500
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  amp: true
+  amp_dtype: "float16"             # {float16 | bfloat16}; autocast dtype, used only on CUDA when amp is true
+  num_workers: 0
+  validate_every: 20               # run validation every N epochs (plus epoch 1 and the last epoch)
+  num_samples_per_volume: 2        # RandCropByPosNegLabeld num_samples
+
+early_stopping:
+  enabled: true
+  monitor: "mse_mask"
+  patience_checks: 5
+  min_delta_relative: 0.001
+  min_epochs: 200
+  restore_best: true
+
+checkpoint:
+  selection: "auto"
+  monitor: "auto"
+
+runtime:
+  device: "auto"
+
+geometry:
+  strict: true
+  atol: 0.5                        # mm-scale tolerance for PixelSpacing/ImagePositionPatient
+                                    # and unitless tolerance for ImageOrientationPatient
+
+infer:
+  sw_batch_size: 4                 # sliding-window inference batch size
+  sw_overlap: 0.25                 # sliding-window overlap fraction
+  sw_mode: "gaussian"              # sliding-window blending mode
+  eval_M: 256                      # number of quantiles used during evaluation
+  outside_fill: "zero"             # {zero | input}; iodine task fills non-lung with 0
+
+cv:
+  n_folds: 5                       # 50 patients -> 10 per fold
+  fold: 0                          # fold index used by train/predict/eval (0..n_folds-1)
+  group_folds: false               # true = leave-one-DE-group-out (requires data.nested_groups)
+  shuffle: true                    # false = contiguous blocks (01-10, 11-20, ...); aligns iodine folds with the kVp DE groups
+  protocol: "train_val_test"      # default: 3 folds train / 1 validation / 1 test
+  val_offset: 1                    # validation fold = (test fold + offset) mod n_folds
+
+output:
+  ckpt_dir: "./checkpoints"
+  pred_dir: "./predictions"
+  metrics_dir: "./metrics"
+  pred_suffix: "SynthIodine"       # appended to the SeriesDescription of saved DICOM predictions
+  save_mask: false                 # enable only after standards-compliant DICOM SEG support
+  mask_suffix: "Mask"              # reserved for a future DICOM SEG mask export; unused while save_mask is false

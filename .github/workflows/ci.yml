@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - run: uv build
+      - run: uv pip install --reinstall --no-deps dist/*.whl
+      - name: Verify installed entry point
+        run: |
+          uv run dualct --help
+          uv run dualct train --help
+          uv run dualct cv --help
+          uv run dualct predict --help
+          uv run dualct eval --help
+          uv run dualct predict-dir --help

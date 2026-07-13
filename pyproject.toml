@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dualct-iodine"
+version = "0.1.0"
+description = "120 kVp dual-energy CT to Iodine (Lung PBV) map or kVp-level (80/140 kVp) translation with SwinUNETR"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Ichikawa Lab" }]
+urls = { Repository = "https://github.com/ichikawalab/dualct-iodine" }
+dependencies = [
+    "monai>=1.4,<1.6",
+    "einops>=0.7",
+    "pydicom>=3,<4",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "tqdm>=4.66",
+    "pyyaml>=6.0",
+    "pandas>=2.1",
+    "torch==2.5.1",
+    "safetensors>=0.4,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+dualct = "dualct_iodine.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dualct_iodine"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu118" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
