@@ -13,7 +13,7 @@ from .checkpointing import load_weights, save_full_checkpoint, save_weights
 from .config import Config
 from .data import build_protocol_loaders
 from .losses import build_loss
-from .metrics import evaluate
+from .metrics import evaluate, write_per_case_csv
 from .model import build_model
 
 PUBLIC_METRICS = ("mse_mask", "psnr_mask", "ssim_mask", "mse_full", "psnr_full", "ssim_full")
@@ -194,7 +194,9 @@ def train_one_fold(cfg: Config, fold_idx: int) -> dict[str, float]:
         selection = "best" if cfg.cv.protocol == "train_val_test" else "final"
     selected_path = fold_dir / f"{selection}.safetensors"
     load_weights(model, selected_path, cfg, strict=True)
-    test_metrics = _publication_view(evaluate(model, test_loader, cfg))
+    per_case: dict[str, list] = {}
+    test_metrics = _publication_view(evaluate(model, test_loader, cfg, per_case_out=per_case))
+    write_per_case_csv(metrics_dir / "per_case.csv", per_case)
     test_metrics["train_time_s"] = time.perf_counter() - train_start
     test_metrics["selected_epoch"] = float(best_epoch if selection == "best" else stop_epoch)
     test_metrics["stop_epoch"] = float(stop_epoch)

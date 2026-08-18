@@ -10,7 +10,8 @@ always be compared for the paper.
 from __future__ import annotations
 
 import time
-from typing import Dict, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -94,6 +95,21 @@ def _mean_sd(vals) -> Tuple[float, float]:
     return mean, sd
 
 
+def write_per_case_csv(path, per_case: Dict[str, List]) -> Path:
+    """Write one row per test case to `path` (CSV), preserving NaN entries.
+
+    The aggregated mean/SD in `metrics.json` collapses the per-case values that
+    `evaluate()` computes; this keeps them so paired per-patient comparisons
+    (e.g. baseline vs. an ablation arm on the same fold) remain possible.
+    """
+    import pandas as pd
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(per_case).to_csv(out, index=False)
+    return out
+
+
 def _ssim_map_2d(x: np.ndarray, y: np.ndarray, data_range: float, win_size: int = 11) -> np.ndarray:
     """Gaussian-window SSIM map with explicit, publication-stable parameters."""
     import scipy.ndimage as ndi
@@ -141,8 +157,12 @@ def ssim_volume(
 
 
 @torch.inference_mode()
-def evaluate(model, loader, cfg: Config) -> Dict[str, float]:
+def evaluate(model, loader, cfg: Config, per_case_out: Optional[Dict[str, List]] = None) -> Dict[str, float]:
     """Run inference over `loader` and report in-mask & full metrics (mean +/- SD).
+
+    When `per_case_out` is given it is filled with the per-case columns (`pid`
+    plus every metric and `infer_time_s`), so callers can persist them via
+    `write_per_case_csv`. The returned aggregate dict is unchanged either way.
 
     Mean/SD are computed across cases, ignoring any case whose mask region is
     empty (that case's mae_in/rmse_in/psnr_in/w1_in are NaN -- see `_mean_sd`), and
@@ -215,4 +235,13 @@ def evaluate(model, loader, cfg: Config) -> Dict[str, float]:
         result[k], result[f"{k}_sd"] = _mean_sd(vals)
 
     result["infer_time_s"], result["infer_time_s_sd"] = _mean_sd(infer_times)
+
+    if per_case_out is not None:
+        per_case_out.clear()
+        per_case_out["pid"] = [
+            str(records[i]["pid"]) if records is not None else str(i) for i in range(n_cases)
+        ]
+        for k, vals in per_case.items():
+            per_case_out[k] = list(vals)
+        per_case_out["infer_time_s"] = list(infer_times)
     return result

@@ -185,12 +185,26 @@ def _load_model_and_test_loader(cfg: Config, fold_idx: int, ckpt_path):
     return model, test_loader
 
 
-def eval_fold(cfg: Config, fold_idx: int, ckpt_path) -> Dict[str, float]:
-    """Load a checkpoint and compute in-mask/full metrics on the fold's held-out test set."""
-    from .metrics import evaluate
+def eval_fold(cfg: Config, fold_idx: int, ckpt_path, per_case_csv=None) -> Dict[str, float]:
+    """Load a checkpoint and compute in-mask/full metrics on the fold's held-out test set.
+
+    Also writes the per-case metrics next to the fold's `metrics.json` (override the
+    location with `per_case_csv`), so an already-trained checkpoint can be given the
+    per-case breakdown without retraining.
+    """
+    from .metrics import evaluate, write_per_case_csv
 
     model, test_loader = _load_model_and_test_loader(cfg, fold_idx, ckpt_path)
-    return evaluate(model, test_loader, cfg)
+    per_case: Dict[str, list] = {}
+    result = evaluate(model, test_loader, cfg, per_case_out=per_case)
+    out_path = (
+        Path(per_case_csv)
+        if per_case_csv
+        else Path(cfg.output.metrics_dir) / cfg.cv.protocol / f"fold{fold_idx}" / "per_case.csv"
+    )
+    write_per_case_csv(out_path, per_case)
+    print(f"[eval_fold] per-case metrics saved to {out_path}")
+    return result
 
 
 def _list_case_dirs(input_dir) -> list:
@@ -309,7 +323,7 @@ def predict_fold(cfg: Config, fold_idx: int, ckpt_path, save_dicom: bool = True)
     When ``save_dicom`` is false this falls back to in-memory evaluation. Formal
     image-export evaluation should keep it true so DICOM quantization is included.
     """
-    from .metrics import _mean_sd, evaluate, mse, psnr, ssim_volume
+    from .metrics import _mean_sd, evaluate, mse, psnr, ssim_volume, write_per_case_csv
     from .transforms import LoadCTSeriesd
 
     model, test_loader = _load_model_and_test_loader(cfg, fold_idx, ckpt_path)
@@ -356,5 +370,8 @@ def predict_fold(cfg: Config, fold_idx: int, ckpt_path, save_dicom: bool = True)
         result: Dict[str, float] = {"n_cases": float(len(records))}
         for name, values in per_case.items():
             result[name], result[f"{name}_sd"] = _mean_sd(values)
+        csv_path = Path(cfg.output.metrics_dir) / cfg.cv.protocol / f"fold{fold_idx}" / "per_case_dicom.csv"
+        write_per_case_csv(csv_path, {"pid": [str(rec["pid"]) for rec in records], **per_case})
+        print(f"[predict_fold] per-case metrics saved to {csv_path}")
         return result
     return evaluate(model, test_loader, cfg)
