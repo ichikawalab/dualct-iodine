@@ -71,3 +71,35 @@ def test_unet_is_selectable_and_preserves_shape():
     x = torch.rand(1, 1, 16, 16, 16)
     with torch.no_grad():
         assert model(x, inference=True).shape == x.shape
+
+
+def _small_unet_cfg(residual: bool) -> Config:
+    cfg = Config()
+    cfg.model.name = "unet"
+    cfg.model.unet_channels = [4, 8, 16]
+    cfg.model.unet_strides = [2, 2]
+    cfg.model.residual = residual
+    # Residual mode requires identical input/target ranges (same-domain kVp task).
+    cfg.normalize.target_min = cfg.normalize.input_hu_min
+    cfg.normalize.target_max = cfg.normalize.input_hu_max
+    cfg.train.roi_size = [16, 16, 16]
+    cfg.validate()
+    return cfg
+
+
+def test_unet_residual_model_is_identity_at_init():
+    # MONAI UNet ends in ConvTranspose3d -> norm -> act -> ResidualUnit(conv(x') + x');
+    # the identity warm start requires the transposed convolution to be zeroed too.
+    model = build_model(_small_unet_cfg(residual=True)).eval()
+    x = torch.rand(1, 1, 16, 16, 16)
+    with torch.no_grad():
+        y = model(x, inference=False)
+    assert torch.allclose(y, x, atol=1e-6)
+
+
+def test_unet_direct_model_is_not_identity_at_init():
+    model = build_model(_small_unet_cfg(residual=False)).eval()
+    x = torch.rand(1, 1, 16, 16, 16)
+    with torch.no_grad():
+        y = model(x, inference=False)
+    assert not torch.allclose(y, x, atol=1e-3)

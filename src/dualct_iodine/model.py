@@ -49,16 +49,23 @@ class ResidualWrapper(nn.Module):
 
 
 def _zero_init_last_conv(base: nn.Module, out_channels: int) -> None:
-    # Assumes the last Conv3d whose out_channels equals the model output channels is the
-    # output projection. This holds for MONAI SwinUNETR and UNet in the pinned version
-    # range (monai>=1.4,<1.6); revisit if the upstream network structure changes.
-    candidates = [m for m in base.modules() if isinstance(m, nn.Conv3d) and m.out_channels == out_channels]
+    # Zero every (transposed) convolution that emits the model's output channels. For
+    # SwinUNETR this is the single output projection. For MONAI UNet the top level is
+    # "ConvTranspose3d -> InstanceNorm -> PReLU -> ResidualUnit(conv(x') + x')", so
+    # zeroing only the final Conv3d leaves x' (a random transposed-conv output) as the
+    # residual delta; the transposed convolution must be zeroed as well for f(x) == 0.
+    # Holds for monai>=1.4,<1.6; revisit if the upstream network structure changes.
+    candidates = [
+        m
+        for m in base.modules()
+        if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)) and m.out_channels == out_channels
+    ]
     if not candidates:
         raise RuntimeError("Could not locate the model output convolution for residual initialization")
-    output_conv = candidates[-1]
-    nn.init.zeros_(output_conv.weight)
-    if output_conv.bias is not None:
-        nn.init.zeros_(output_conv.bias)
+    for output_conv in candidates:
+        nn.init.zeros_(output_conv.weight)
+        if output_conv.bias is not None:
+            nn.init.zeros_(output_conv.bias)
 
 
 def build_model(cfg: Config) -> nn.Module:
