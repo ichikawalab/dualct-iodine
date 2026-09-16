@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Direct unit tests for model construction (no training needed).
 
-Verifies the invariant the residual design depends on: at initialization
-(zero-initialized final conv), the residual model must be the identity
-(y == x), while the direct-prediction model must not be.
+Verifies the invariants the residual design depends on: at initialization
+(zero-initialized output gate) the residual model must be the identity (y == x),
+it must stay close to the identity after the first optimizer step, and the
+direct-prediction model must not be the identity.
 """
 from __future__ import annotations
 
@@ -89,7 +90,7 @@ def _small_unet_cfg(residual: bool) -> Config:
 
 def test_unet_residual_model_is_identity_at_init():
     # MONAI UNet ends in ConvTranspose3d -> norm -> act -> ResidualUnit(conv(x') + x');
-    # the identity warm start requires the transposed convolution to be zeroed too.
+    # the identity warm start must not depend on zeroing anything inside that block.
     model = build_model(_small_unet_cfg(residual=True)).eval()
     x = torch.rand(1, 1, 16, 16, 16)
     with torch.no_grad():
@@ -103,3 +104,33 @@ def test_unet_direct_model_is_not_identity_at_init():
     with torch.no_grad():
         y = model(x, inference=False)
     assert not torch.allclose(y, x, atol=1e-3)
+
+
+def _delta_after_one_step(model, x, lr=2e-4):
+    """Mean |y - x| after a single AdamW step on a near-identity target."""
+    model.train()
+    target = (x + 0.004 * torch.randn_like(x)).clamp(0.0, 1.0)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    opt.zero_grad()
+    (model(x, inference=False) - target).abs().mean().backward()
+    opt.step()
+    model.eval()
+    with torch.no_grad():
+        return (model(x, inference=False) - x).abs().mean().item()
+
+
+def test_unet_residual_stays_near_identity_after_first_step():
+    # Regression: zeroing the UNet output convs *inside* the network gave y == x at
+    # step 0 only; InstanceNorm rescaled the first update to unit variance and the top
+    # ResidualUnit's identity skip passed it to the output (mean |f(x)| ~ 0.34).
+    torch.manual_seed(0)
+    model = build_model(_small_unet_cfg(residual=True))
+    x = torch.rand(2, 1, 16, 16, 16)
+    assert _delta_after_one_step(model, x) < 1e-2
+
+
+def test_swinunetr_residual_stays_near_identity_after_first_step():
+    torch.manual_seed(0)
+    model = build_model(_small_cfg(residual=True))
+    x = torch.rand(1, 1, 32, 64, 64)
+    assert _delta_after_one_step(model, x) < 1e-2

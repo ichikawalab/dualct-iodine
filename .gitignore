@@ -62,3 +62,6 @@ dist/
 
 # Resolved local configurations may contain filesystem paths.
 resolved_config_*.yaml
+
+# Local copy of the kVp clinical data root (never commit).
+DICOMimage/
