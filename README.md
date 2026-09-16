@@ -118,6 +118,19 @@ For 120 kVp -> 140 kVp, override the target subdirectory and prediction suffix:
 uv run dualct cv --config configs/kvp.yaml --data-root D:/secure/dualct_kvp --set data.target_subdir=140kV output.pred_suffix=Synth_140kV
 ```
 
+### Residual (identity warm-start) mode
+
+`model.residual: true` (the kVp default; `--residual` / `--no-residual` on the
+CLI) predicts `y = x + alpha * gate(f(x))`, where `f` is the unmodified
+SwinUNETR or UNet and `gate` is a 1x1x1 convolution initialized to zero. The
+model is therefore exactly the identity mapping at initialization and moves
+away from it gradually during training, for either architecture. The gate is
+applied outside the base network on purpose: zeroing an output layer inside
+MONAI UNet is the identity only at step 0, because the following InstanceNorm
+and identity skip rescale the first update to unit variance. Residual mode
+requires the input and target to share one normalization range, so it is
+rejected for the cross-domain iodine configuration.
+
 ## Evaluation and inference
 
 Evaluate a checkpoint, iodine task:
