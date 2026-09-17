@@ -9,7 +9,7 @@ same-domain kVp task).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -71,11 +71,18 @@ def _write_slice_as_new_series(
     rescale_slope: float,
     rescale_intercept: float,
     pixel_representation: int,
+    instance_number: Optional[int] = None,
 ) -> None:
     """Stamp `ds` (a template slice read from the source series) as one slice of a
     new derived series and write it to `out_dir`. Shared by save_prediction_as_dicom
     and save_mask_as_dicom -- only how `stored_arr` and the rescale/representation
     values are computed differs between the two.
+
+    `z` is the slice's index in the position-sorted volume. `instance_number` is the
+    InstanceNumber to stamp and to name the file after; callers pass the source
+    slice's own InstanceNumber so the derived series keeps the source numbering
+    (viewers that stack by file name or InstanceNumber, e.g. ImageJ, then show it in
+    the same order as the source). When None, `z + 1` is used.
     """
     import pydicom
     from pydicom.dataset import FileMetaDataset
@@ -99,7 +106,8 @@ def _write_slice_as_new_series(
     ds.SOPInstanceUID = generate_uid(prefix=None)
     ds.ImageType = ["DERIVED", "SECONDARY"]
     ds.DerivationDescription = "AI-generated image; not for primary diagnosis"
-    ds.InstanceNumber = int(z + 1)
+    number = int(z + 1) if instance_number is None else int(instance_number)
+    ds.InstanceNumber = number
 
     if not getattr(ds, "file_meta", None):
         ds.file_meta = FileMetaDataset()
@@ -108,8 +116,26 @@ def _write_slice_as_new_series(
     ds.file_meta.MediaStorageSOPInstanceUID = ds.SOPInstanceUID
 
     ds.PixelData = stored_arr.tobytes(order="C")
-    out_path = out_dir / f"IMG_{z + 1:04d}.dcm"
+    out_path = out_dir / f"IMG_{number:04d}.dcm"
     pydicom.dcmwrite(str(out_path), ds, enforce_file_format=True)
+
+
+def _source_instance_numbers(src_files) -> Optional[List[int]]:
+    """InstanceNumber of each source slice (in the given order), or None when any is
+    missing or non-unique, in which case callers fall back to volume-index numbering."""
+    import pydicom
+
+    numbers: List[int] = []
+    for path in src_files:
+        ds = pydicom.dcmread(path, force=True, stop_before_pixels=True)
+        value = getattr(ds, "InstanceNumber", None)
+        try:
+            numbers.append(int(value))
+        except (TypeError, ValueError):
+            return None
+    if len(set(numbers)) != len(numbers):
+        return None
+    return numbers
 
 
 def save_prediction_as_dicom(
@@ -137,6 +163,11 @@ def save_prediction_as_dicom(
         )
 
     new_series_uid = generate_uid(prefix=None)
+    # The volume is stacked in ascending slice-position order, which for many series
+    # runs opposite to the acquisition's InstanceNumber. Keep the source numbering on
+    # the derived slices so the series stacks the same way as its source in viewers
+    # that order by InstanceNumber or file name.
+    instance_numbers = _source_instance_numbers(src_files)
     for z in range(D):
         ds = pydicom.dcmread(src_files[z])
 
@@ -156,6 +187,7 @@ def save_prediction_as_dicom(
             rescale_slope=slope,
             rescale_intercept=intercept,
             pixel_representation=1,
+            instance_number=None if instance_numbers is None else instance_numbers[z],
         )
 
 
