@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -324,15 +324,18 @@ def _dataset(data, transform, cfg: Config, *, training: bool):
     return Dataset(data=data, transform=transform)
 
 
-def _loader(dataset, cfg: Config, *, batch_size: int, shuffle: bool, drop_last: bool):
+def _loader(
+    dataset, cfg: Config, *, batch_size: int, shuffle: bool, drop_last: bool, num_workers: Optional[int] = None
+):
     from monai.data import DataLoader, list_data_collate
 
+    workers = cfg.train.num_workers if num_workers is None else int(num_workers)
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=cfg.train.num_workers,
-        persistent_workers=(cfg.train.num_workers > 0),
+        num_workers=workers,
+        persistent_workers=(workers > 0),
         pin_memory=torch.cuda.is_available() and cfg.runtime.device != "cpu",
         drop_last=drop_last,
         collate_fn=list_data_collate,
@@ -345,10 +348,17 @@ def build_protocol_loaders(cfg: Config, fold_idx: int) -> dict:
     train_ds = _dataset(train_records, build_train_transforms(cfg), cfg, training=True)
     val_ds = _dataset(val_records, build_val_transforms(cfg), cfg, training=False) if val_records else None
     test_ds = _dataset(test_records, build_val_transforms(cfg), cfg, training=False)
+    # Whole-volume (validation / test) loaders always run in the main process. With
+    # workers, every item is a full CT volume (~0.6 GB of float32 tensors) that has to be
+    # handed to the parent through shared memory, and on Windows that hand-off has
+    # crashed a worker inside torch's c10.dll (access violation) after hours of training,
+    # aborting the fold after its checkpoints were already saved. Loading a cached
+    # volume in-process costs well under a second, negligible next to sliding-window
+    # inference, so nothing is lost by avoiding the IPC path here.
     loaders = {
         "train": _loader(train_ds, cfg, batch_size=cfg.train.batch_size, shuffle=True, drop_last=True),
-        "val": _loader(val_ds, cfg, batch_size=1, shuffle=False, drop_last=False) if val_ds else None,
-        "test": _loader(test_ds, cfg, batch_size=1, shuffle=False, drop_last=False),
+        "val": _loader(val_ds, cfg, batch_size=1, shuffle=False, drop_last=False, num_workers=0) if val_ds else None,
+        "test": _loader(test_ds, cfg, batch_size=1, shuffle=False, drop_last=False, num_workers=0),
         "records": {"train": train_records, "val": val_records, "test": test_records},
     }
     if len(loaders["train"]) == 0:
@@ -385,7 +395,8 @@ def build_test_loader(cfg: Config, fold_idx: int):
     """Build the held-out test loader selected by ``cv.protocol``."""
     _, _, test_records = _split_records_for_protocol(cfg, fold_idx)
     test_ds = _dataset(test_records, build_val_transforms(cfg), cfg, training=False)
-    return _loader(test_ds, cfg, batch_size=1, shuffle=False, drop_last=False)
+    # In-process for the same reason as the protocol loaders above.
+    return _loader(test_ds, cfg, batch_size=1, shuffle=False, drop_last=False, num_workers=0)
 
 
 def build_loaders(cfg: Config, fold_idx: int):

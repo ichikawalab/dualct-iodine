@@ -245,3 +245,25 @@ def test_num_folds_group_mode(synthetic_nested_kvp_root):
     cfg.task.mask_source = "body_threshold"
     cfg.cv.group_folds = True
     assert num_folds(cfg) == len(groups)
+
+
+def test_whole_volume_loaders_run_in_process_even_with_train_workers(synthetic_root):
+    # Regression: validation/test items are whole volumes handed from worker to parent
+    # through shared memory; on Windows that hand-off crashed a worker (c10.dll access
+    # violation) at the end of a multi-hour fold. Those loaders must ignore
+    # train.num_workers and load in the main process; the training loader keeps it.
+    from dualct_iodine.data import build_protocol_loaders, build_test_loader
+
+    root, _ = synthetic_root
+    cfg = Config()
+    cfg.data.root = str(root)
+    cfg.train.roi_size = [32, 64, 64]
+    cfg.train.batch_size = 1
+    cfg.train.num_workers = 2
+    cfg.cv.n_folds = 3
+    cfg.validate()
+    loaders = build_protocol_loaders(cfg, fold_idx=0)
+    assert loaders["train"].num_workers == 2
+    assert loaders["val"].num_workers == 0
+    assert loaders["test"].num_workers == 0
+    assert build_test_loader(cfg, fold_idx=0).num_workers == 0
